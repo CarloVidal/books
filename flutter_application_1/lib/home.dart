@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'models/book.dart';
+import 'services/book_repository.dart';
 import 'add_book_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -9,480 +10,254 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  List<Map<String, dynamic>> books = [];
-  bool isLoading = true;
-  bool hasError = false;
-  String errorMessage = '';
-
-  Future<void> loadBooks() async {
-    setState(() {
-      isLoading = true;
-      hasError = false;
-    });
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final booksJson = prefs.getStringList('books') ?? [];
-      List<Map<String, dynamic>> loadedBooks = booksJson
-          .map((bookJson) => Map<String, dynamic>.from(jsonDecode(bookJson)))
-          .toList();
-      // If no books, add 4 sample books
-      if (loadedBooks.isEmpty) {
-        loadedBooks = [
-          {
-            'title': 'Kuko Ng Agila',
-            'author': 'Harper Lee',
-            'publishedYear': 1960,
-            'createdAt': DateTime.now().toIso8601String(),
-            'image': 'assets/demon1.jpg',
-          },
-          {
-            'title': 'Deathly Hallows',
-            'author': 'George Orwell',
-            'publishedYear': 1949,
-            'createdAt': DateTime.now().toIso8601String(),
-            'image': 'assets/demon2.jpg',
-          },
-          {
-            'title': 'Order of the Phoenix',
-            'author': 'F. Scott Fitzgerald',
-            'publishedYear': 1925,
-            'createdAt': DateTime.now().toIso8601String(),
-            'image': 'assets/demon3.jpg',
-          },
-          {
-            'title': 'The Sorcerers Stone',
-            'author': 'Jane Austen',
-            'publishedYear': 1813,
-            'createdAt': DateTime.now().toIso8601String(),
-            'image': 'assets/demon4.jpg',
-          },
-        ];
-        final sampleBooksJson = loadedBooks.map((book) => jsonEncode(book)).toList();
-        await prefs.setStringList('books', sampleBooksJson);
-      }
-      setState(() {
-        books = loadedBooks;
-        isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        hasError = true;
-        errorMessage = 'Failed to load books:  e.toString()}';
-        isLoading = false;
-      });
-    }
-  }
-
-  Future<void> saveBooks() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final booksJson = books.map((book) => jsonEncode(book)).toList();
-      await prefs.setStringList('books', booksJson);
-    } catch (e) {
-      setState(() {
-        hasError = true;
-        errorMessage = 'Failed to save books: ${e.toString()}';
-      });
-    }
-  }
-
-  Future<void> addBook(Map<String, dynamic> newBook) async {
-    setState(() {
-      books.insert(0, newBook);
-    });
-    await saveBooks();
-  }
-
-  Future<void> deleteBook(int index) async {
-    setState(() {
-      books.removeAt(index);
-    });
-    await saveBooks();
-  }
-
-  Future<void> editBook(int index, Map<String, dynamic> updatedBook) async {
-    setState(() {
-      books[index] = updatedBook;
-    });
-    await saveBooks();
-  }
+  final BookRepository _bookRepository = BookRepository();
+  List<Book> _books = [];
+  bool _isLoading = true;
+  bool _hasError = false;
+  String _errorMessage = '';
+  bool _isConnected = true;
 
   @override
   void initState() {
     super.initState();
-    loadBooks();
+    _checkConnectivity();
+    _loadBooks();
+  }
+
+  Future<void> _checkConnectivity() async {
+    var connectivityResult = await Connectivity().checkConnectivity();
+    setState(() {
+      _isConnected = connectivityResult != ConnectivityResult.none;
+    });
+  }
+
+  Future<void> _loadBooks() async {
+    if (!_isConnected) {
+      setState(() {
+        _hasError = true;
+        _errorMessage = 'No internet connection. Please check your network.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _hasError = false;
+    });
+
+    await _bookRepository.loadBooks();
+    
+    setState(() {
+      _books = _bookRepository.books;
+      _isLoading = false;
+      if (_bookRepository.error != null) {
+        _hasError = true;
+        _errorMessage = _bookRepository.error!;
+      }
+    });
+  }
+
+  Future<void> _addBook(Book book) async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final success = await _bookRepository.addBook(book);
+    
+    setState(() {
+      _isLoading = false;
+      if (success) {
+        _books = _bookRepository.books;
+        _hasError = false;
+      } else {
+        _hasError = true;
+        _errorMessage = _bookRepository.error ?? 'Failed to add book';
+      }
+    });
+  }
+
+  Future<void> _deleteBook(String id) async {
+    final success = await _bookRepository.deleteBook(id);
+    
+    if (success) {
+      setState(() {
+        _books = _bookRepository.books;
+        _hasError = false;
+      });
+    } else {
+      setState(() {
+        _hasError = true;
+        _errorMessage = _bookRepository.error ?? 'Failed to delete book';
+      });
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Error'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('📖 My Book Library'),
-      ),
-      body: Container(
-        decoration: BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/bgg.jpg'),
-            fit: BoxFit.cover,
-            colorFilter: ColorFilter.mode(
-              Colors.black.withOpacity(0.3),
-              BlendMode.darken,
-            ),
+        title: Text('Book Library'),
+        backgroundColor: Color(0xFF8B4513),
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.refresh),
+            onPressed: _loadBooks,
           ),
-        ),
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.black.withOpacity(0.2),
-                Colors.transparent,
-                Colors.black.withOpacity(0.1),
-              ],
-            ),
-          ),
-          child: _buildBody(),
-        ),
+        ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      body: _buildBody(),
+      floatingActionButton: FloatingActionButton(
         onPressed: () async {
           final result = await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => AddBookPage()),
+            MaterialPageRoute(builder: (context) => AddBookPage()),
           );
-          if (result != null) {
-            await addBook(result);
+          if (result != null && result is Book) {
+            await _addBook(result);
           }
         },
-        icon: Icon(Icons.add),
-        label: Text('Add Book'),
+        backgroundColor: Color(0xFF8B4513),
+        child: Icon(Icons.add, color: Colors.white),
       ),
     );
   }
 
   Widget _buildBody() {
-    if (isLoading) {
+    if (_isLoading) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.indigo),
-            ),
+            CircularProgressIndicator(color: Color(0xFF8B4513)),
             SizedBox(height: 16),
-            Text(
-              'Loading books...',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade600,
-              ),
-            ),
+            Text('Loading books...'),
           ],
         ),
       );
     }
 
-    if (hasError) {
+    if (_hasError) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 64,
-              color: Colors.red.shade300,
-            ),
+            Icon(Icons.error_outline, size: 64, color: Colors.red),
             SizedBox(height: 16),
             Text(
-              'Oops! Something went wrong',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey.shade700,
-              ),
-            ),
-            SizedBox(height: 8),
-            Text(
-              errorMessage,
+              _errorMessage,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade600,
-              ),
+              style: TextStyle(fontSize: 16),
             ),
-            SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: loadBooks,
-              icon: Icon(Icons.refresh),
-              label: Text('Try Again'),
+            SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _loadBooks,
+              child: Text('Retry'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF8B4513),
+                foregroundColor: Colors.white,
+              ),
             ),
           ],
         ),
       );
     }
 
-    if (books.isEmpty) {
+    if (_books.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.book,
-              size: 64,
-              color: Colors.grey.shade400,
-            ),
+            Icon(Icons.book_outlined, size: 64, color: Colors.grey),
             SizedBox(height: 16),
             Text(
-              'No books yet',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey.shade600,
-              ),
+              'No books found',
+              style: TextStyle(fontSize: 18, color: Colors.grey),
             ),
             SizedBox(height: 8),
             Text(
-              'Add your first book to get started!',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade500,
-              ),
+              'Add your first book by tapping the + button',
+              style: TextStyle(fontSize: 14, color: Colors.grey),
             ),
           ],
         ),
       );
     }
 
-    return Padding(
+    return ListView.builder(
       padding: EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(height: 24),
-          Expanded(
-            child: ListView.builder(
-              itemCount: books.length,
-              itemBuilder: (context, index) {
-                final book = books[index];
-                return Card(
-                  color: Color(0xFFFFF8E1),
-                  elevation: 6,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  margin: EdgeInsets.only(bottom: 12),
-                  child: Container(
-                    height: 110, // Fixed height for all cards
-                    padding: EdgeInsets.all(8),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        // Book Image
-                        book['image'] != null
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: Image.asset(
-                                  book['image'],
-                                  width: 90,
-                                  height: 90,
-                                  fit: BoxFit.cover,
-                                ),
-                              )
-                            : Container(
-                                width: 90,
-                                height: 90,
-                                decoration: BoxDecoration(
-                                  color: Color(0xFFD7B377).withOpacity(0.18),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Color(0xFFD7B377).withOpacity(0.4),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: Icon(
-                                  Icons.menu_book,
-                                  color: Color(0xFFD7B377),
-                                  size: 36,
-                                ),
-                              ),
-                        SizedBox(width: 16),
-                        // Book Info
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                book['title'] ?? 'Untitled',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 16,
-                                  color: Color(0xFF3E2723), // Deep brown for visibility
-                                ),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'by ${book['author'] ?? 'Unknown Author'}',
-                                style: TextStyle(
-                                  color: Color(0xFFD7B377),
-                                  fontSize: 14,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              if (book['publishedYear'] != null && book['publishedYear'] != 0) ...[
-                                SizedBox(height: 2),
-                                Text(
-                                  'Published: ${book['publishedYear']}',
-                                  style: TextStyle(
-                                    color: Color(0xFFD7B377).withOpacity(0.7),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+      itemCount: _books.length,
+      itemBuilder: (context, index) {
+        final book = _books[index];
+        return Card(
+          margin: EdgeInsets.only(bottom: 16),
+          elevation: 4,
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundImage: AssetImage(book.image),
+              radius: 25,
+            ),
+            title: Text(
+              book.title,
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Author: ${book.author}'),
+                if (book.publishedYear != null)
+                  Text('Year: ${book.publishedYear}'),
+              ],
+            ),
+            trailing: IconButton(
+              icon: Icon(Icons.delete, color: Colors.red),
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (BuildContext context) {
+                    return AlertDialog(
+                      title: Text('Delete Book'),
+                      content: Text('Are you sure you want to delete "${book.title}"?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: Text('Cancel'),
                         ),
-                        // Action buttons (edit/delete) can go here if needed
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Edit Icon
-                            IconButton(
-                              icon: Icon(
-                                Icons.edit,
-                                color: Color(0xFF8B4513),
-                                size: 20,
-                              ),
-                              onPressed: () async {
-                                final result = await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => AddBookPage(
-                                      initialBook: book,
-                                    ),
-                                  ),
-                                );
-                                if (result != null) {
-                                  await editBook(index, result);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Book updated successfully'),
-                                      backgroundColor: Colors.green,
-                                      behavior: SnackBarBehavior.floating,
-                                    ),
-                                  );
-                                }
-                              },
-                              tooltip: 'Edit Book',
-                            ),
-                            // Delete Icon
-                            IconButton(
-                              icon: Icon(
-                                Icons.delete,
-                                color: Color(0xFFCD5C5C),
-                                size: 20,
-                              ),
-                              onPressed: () async {
-                                await _showDeleteConfirmation(context, index);
-                              },
-                              tooltip: 'Delete Book',
-                            ),
-                          ],
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            _deleteBook(book.id!);
+                          },
+                          child: Text('Delete', style: TextStyle(color: Colors.red)),
                         ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 );
               },
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  void _showBookDetails(BuildContext context, Map<String, dynamic> book) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Text(
-            book['title'] ?? 'Untitled',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Author: ${book['author'] ?? 'Unknown'}',
-                style: TextStyle(fontSize: 16),
-              ),
-              SizedBox(height: 8),
-              if (book['publishedYear'] != null && book['publishedYear'] != 0)
-                Text(
-                  'Published: ${book['publishedYear']}',
-                  style: TextStyle(fontSize: 16),
-                ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text('Close'),
-            ),
-          ],
         );
       },
     );
-  }
-
-  Future<void> _showDeleteConfirmation(BuildContext context, int index) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: Text('Delete Book'),
-          content: Text('Are you sure you want to delete "${books[index]['title']}"?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(
-                'Delete',
-                style: TextStyle(color: Colors.red),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (confirmed == true) {
-      await deleteBook(index);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Book deleted successfully'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
   }
 }
